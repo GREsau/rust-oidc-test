@@ -32,10 +32,7 @@ pub struct VerificationError<'a> {
 
 impl<'a> VerificationError<'a> {
     pub fn new(category: Category, jwt: UnverifiedJwt<'a>) -> Self {
-        VerificationError {
-            category,
-            jwt,
-        }
+        VerificationError { category, jwt }
     }
 
     pub fn into_unverified_jwt(self) -> UnverifiedJwt<'a> {
@@ -53,13 +50,16 @@ impl fmt::Display for VerificationError<'_> {
             Category::JwkMissingRsaParams => {
                 write!(f, "JWK is missing required RSA parameters ('n' and 'e').")
             }
+            Category::JwkMissingEcdsaParams => {
+                write!(f, "JWK is missing required ECDSA parameters ('x' and 'y').")
+            }
             Category::InvalidSignature => write!(f, "JWT signature is not valid."),
             Category::UnsupportedAlgorithm => write!(
                 f,
                 "JWT is using unsupported crypto algorithm: '{}'.",
                 &self.jwt.header().alg
             ),
-            Category::UnknownKid  => write!(
+            Category::UnknownKid => write!(
                 f,
                 "JWT has 'kid' which was not found in JWKS: '{}'.",
                 &self.jwt.header().kid
@@ -73,6 +73,7 @@ impl std::error::Error for VerificationError<'_> {}
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Category {
     JwkMissingRsaParams,
+    JwkMissingEcdsaParams,
     InvalidSignature,
     UnsupportedAlgorithm,
     UnknownKid,

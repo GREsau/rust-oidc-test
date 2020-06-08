@@ -1,5 +1,6 @@
 use crate::error::{Category, VerificationError};
 use crate::jwt::{Jwt, UnverifiedJwt};
+use ring::signature::RsaPublicKeyComponents;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,11 +28,17 @@ impl Jwks {
 pub struct Jwk {
     pub kty: String,
     #[serde(default)]
+    pub alg: Option<String>,
+    #[serde(default)]
     pub kid: Option<String>,
     #[serde(default)]
     pub n: Option<String>,
     #[serde(default)]
     pub e: Option<String>,
+    #[serde(default)]
+    pub x: Option<String>,
+    #[serde(default)]
+    pub y: Option<String>,
 }
 
 impl Jwk {
@@ -43,11 +50,37 @@ impl Jwk {
         b64_decode(self.e.as_ref()?).ok()
     }
 
+    pub fn x(&self) -> Option<Vec<u8>> {
+        b64_decode(self.x.as_ref()?).ok()
+    }
+
+    pub fn y(&self) -> Option<Vec<u8>> {
+        b64_decode(self.y.as_ref()?).ok()
+    }
+
     pub fn verify<'a>(&self, jwt: UnverifiedJwt<'a>) -> Result<Jwt, VerificationError<'a>> {
+        jwt.verify(self)
+    }
+
+    pub(crate) fn rsa_components(&self) -> Option<RsaPublicKeyComponents<Vec<u8>>> {
         match (self.modulus(), self.exponent()) {
-            (Some(n), Some(e)) => jwt.verify(&n, &e),
-            _ => Err(VerificationError::new(Category::JwkMissingRsaParams, jwt)),
+            (Some(n), Some(e)) => Some(RsaPublicKeyComponents { n, e }),
+            _ => None,
         }
+    }
+
+    pub(crate) fn ecdsa_public_key(&self) -> Option<Vec<u8>> {
+        let (mut x, mut y) = match (self.x(), self.y()) {
+            (Some(x), Some(y)) => (x, y),
+            _ => return None,
+        };
+
+        let mut result = Vec::with_capacity(1 + x.len() + y.len());
+        // first octet 0x04 indicates no point compression
+        result.push(4);
+        result.append(&mut x);
+        result.append(&mut y);
+        Some(result)
     }
 }
 

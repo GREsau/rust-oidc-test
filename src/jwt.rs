@@ -1,6 +1,9 @@
-use crate::error::{Category, JwtParseError, VerificationError};
+use crate::{
+    error::{Category, JwtParseError, VerificationError},
+    jwk::Jwk,
+};
 use core::fmt;
-use ring::signature::{RsaPublicKeyComponents, RSA_PKCS1_2048_8192_SHA256};
+use ring::signature::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -71,19 +74,60 @@ impl<'a> UnverifiedJwt<'a> {
         &self.signature
     }
 
-    pub fn verify(self, modulus: &[u8], exponent: &[u8]) -> Result<Jwt, VerificationError<'a>> {
-        let alg = match self.header.alg.as_ref() {
-            "RS256" => &RSA_PKCS1_2048_8192_SHA256,
-            _ => return Err(VerificationError::new(Category::UnsupportedAlgorithm, self)),
+    pub fn verify(self, jwk: &Jwk) -> Result<Jwt, VerificationError<'a>> {
+        match self.header.alg.as_ref() {
+            "RS256" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA256),
+            "RS384" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA384),
+            "RS512" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA512),
+            "ES256" => self.verify_ecdsa(jwk, &ECDSA_P256_SHA256_FIXED),
+            "ES384" => self.verify_ecdsa(jwk, &ECDSA_P384_SHA384_FIXED),
+            // "ES512" => requires https://github.com/briansmith/ring/issues/824
+            _ => Err(VerificationError::new(Category::UnsupportedAlgorithm, self)),
+        }
+    }
+
+    fn verify_rsa(self, jwk: &Jwk, alg: &RsaParameters) -> Result<Jwt, VerificationError<'a>> {
+        let message = &self.encoded[..self.payload_end];
+        let components = match jwk.rsa_components() {
+            Some(c) => c,
+            None => return Err(VerificationError::new(Category::JwkMissingRsaParams, self)),
         };
 
-        let message = &self.encoded[..self.payload_end];
-        let components = RsaPublicKeyComponents {
-            n: modulus,
-            e: exponent,
-        };
         if components
             .verify(alg, message.as_bytes(), &self.signature)
+            .is_err()
+        {
+            return Err(VerificationError::new(Category::InvalidSignature, self));
+        }
+
+        Ok(Jwt {
+            header: self.header,
+            payload: self.payload,
+        })
+    }
+
+    fn verify_ecdsa(
+        self,
+        jwk: &Jwk,
+        alg: &EcdsaVerificationAlgorithm,
+    ) -> Result<Jwt, VerificationError<'a>> {
+        let message = &self.encoded[..self.payload_end];
+        let public_key = match jwk.ecdsa_public_key() {
+            Some(c) => c,
+            None => {
+                return Err(VerificationError::new(
+                    Category::JwkMissingEcdsaParams,
+                    self,
+                ))
+            }
+        };
+
+        if alg
+            .verify(
+                public_key.as_slice().into(),
+                message.as_bytes().into(),
+                self.signature.as_slice().into(),
+            )
             .is_err()
         {
             return Err(VerificationError::new(Category::InvalidSignature, self));
