@@ -1,5 +1,5 @@
-use crate::error::{Category, VerificationError};
-use crate::jwt::{Jwt, UnverifiedJwt};
+use crate::error::JwtVerifyError;
+use crate::jwt::Jwt;
 use ring::signature::RsaPublicKeyComponents;
 use serde::{Deserialize, Serialize};
 
@@ -10,16 +10,18 @@ pub struct Jwks {
 
 impl Jwks {
     pub fn get_key<'a>(&'a self, kid: &str) -> Option<&'a Jwk> {
-        self.keys
-            .iter()
-            .find(|k| k.kid.as_ref().map(String::as_ref) == Some(kid))
+        self.keys.iter().find(|k| k.kid.as_deref() == Some(kid))
     }
 
-    pub fn verify<'a>(&self, jwt: UnverifiedJwt<'a>) -> Result<Jwt, VerificationError<'a>> {
-        let kid = &jwt.header().kid;
+    pub fn verify(&self, jwt: &Jwt) -> Result<(), JwtVerifyError> {
+        let kid = jwt
+            .header()
+            .kid
+            .as_deref()
+            .ok_or(JwtVerifyError::UnknownKid(String::new()))?;
         match self.get_key(kid) {
             Some(jwk) => jwk.verify(jwt),
-            None => Err(VerificationError::new(Category::UnknownKid, jwt)),
+            None => Err(JwtVerifyError::UnknownKid(kid.to_string())),
         }
     }
 }
@@ -58,7 +60,7 @@ impl Jwk {
         b64_decode(self.y.as_ref()?).ok()
     }
 
-    pub fn verify<'a>(&self, jwt: UnverifiedJwt<'a>) -> Result<Jwt, VerificationError<'a>> {
+    pub fn verify(&self, jwt: &Jwt) -> Result<(), JwtVerifyError> {
         jwt.verify(self)
     }
 
@@ -70,17 +72,18 @@ impl Jwk {
     }
 
     pub(crate) fn ecdsa_public_key(&self) -> Option<Vec<u8>> {
-        let (mut x, mut y) = match (self.x(), self.y()) {
-            (Some(x), Some(y)) => (x, y),
-            _ => return None,
-        };
+        match (self.x(), self.y()) {
+            (Some(x), Some(y)) => {
+                let mut result = Vec::with_capacity(1 + x.len() + y.len());
 
-        let mut result = Vec::with_capacity(1 + x.len() + y.len());
-        // first octet 0x04 indicates no point compression
-        result.push(4);
-        result.append(&mut x);
-        result.append(&mut y);
-        Some(result)
+                // first octet 0x04 indicates no point compression
+                result.push(4);
+                result.extend(x);
+                result.extend(y);
+                Some(result)
+            }
+            _ => None,
+        }
     }
 }
 

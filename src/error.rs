@@ -1,7 +1,6 @@
-use crate::jwt::UnverifiedJwt;
 use core::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JwtParseError {
     MalformedHeader,
     MalformedPayload,
@@ -24,57 +23,25 @@ impl fmt::Display for JwtParseError {
 
 impl std::error::Error for JwtParseError {}
 
-#[derive(Debug, Clone)]
-pub struct VerificationError<'a> {
-    category: Category,
-    jwt: UnverifiedJwt<'a>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JwtVerifyError {
+    InvalidSignature,
+    UnsupportedAlgorithm(String),
+    UnknownKid(String),
 }
 
-impl<'a> VerificationError<'a> {
-    pub fn new(category: Category, jwt: UnverifiedJwt<'a>) -> Self {
-        VerificationError { category, jwt }
-    }
-
-    pub fn into_unverified_jwt(self) -> UnverifiedJwt<'a> {
-        self.jwt
-    }
-
-    pub fn classify(&self) -> Category {
-        self.category
-    }
-}
-
-impl fmt::Display for VerificationError<'_> {
+impl fmt::Display for JwtVerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.classify() {
-            Category::JwkMissingRsaParams => {
-                write!(f, "JWK is missing required RSA parameters ('n' and 'e').")
+        match self {
+            JwtVerifyError::InvalidSignature => write!(f, "JWT signature is not valid."),
+            JwtVerifyError::UnsupportedAlgorithm(alg) => {
+                write!(f, "JWT is using unsupported crypto algorithm: '{}'.", alg)
             }
-            Category::JwkMissingEcdsaParams => {
-                write!(f, "JWK is missing required ECDSA parameters ('x' and 'y').")
+            JwtVerifyError::UnknownKid(kid) => {
+                write!(f, "JWT has 'kid' which was not found in JWKS: '{}'.", kid)
             }
-            Category::InvalidSignature => write!(f, "JWT signature is not valid."),
-            Category::UnsupportedAlgorithm => write!(
-                f,
-                "JWT is using unsupported crypto algorithm: '{}'.",
-                &self.jwt.header().alg
-            ),
-            Category::UnknownKid => write!(
-                f,
-                "JWT has 'kid' which was not found in JWKS: '{}'.",
-                &self.jwt.header().kid
-            ),
         }
     }
 }
 
-impl std::error::Error for VerificationError<'_> {}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Category {
-    JwkMissingRsaParams,
-    JwkMissingEcdsaParams,
-    InvalidSignature,
-    UnsupportedAlgorithm,
-    UnknownKid,
-}
+impl std::error::Error for JwtVerifyError {}

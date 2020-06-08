@@ -1,23 +1,22 @@
-use crate::{
-    error::{Category, JwtParseError, VerificationError},
-    jwk::Jwk,
-};
+use crate::error::{JwtParseError, JwtVerifyError};
+use crate::jwk::Jwk;
 use core::fmt;
 use ring::signature::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::str::FromStr;
 
-#[derive(Debug, Clone)]
-pub struct UnverifiedJwt<'a> {
-    encoded: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Jwt {
+    encoded: String,
     payload_end: usize,
     header: JwtHeader,
     payload: JwtPayload,
     signature: Vec<u8>,
 }
 
-impl<'a> UnverifiedJwt<'a> {
-    pub fn new(encoded: &'a str) -> Result<Self, JwtParseError> {
+impl Jwt {
+    pub fn new(encoded: String) -> Result<Self, JwtParseError> {
         if encoded.is_empty() {
             return Err(JwtParseError::WrongNumberOfParts(0));
         }
@@ -37,7 +36,7 @@ impl<'a> UnverifiedJwt<'a> {
         let payload = Self::decode_payload(payload_part).ok_or(JwtParseError::MalformedPayload)?;
         let signature =
             Self::decode_signature(signature_part).ok_or(JwtParseError::MalformedSignature)?;
-        Ok(UnverifiedJwt {
+        Ok(Self {
             encoded,
             payload_end,
             header,
@@ -66,7 +65,7 @@ impl<'a> UnverifiedJwt<'a> {
         &self.header
     }
 
-    pub fn unverified_payload(&self) -> &JwtPayload {
+    pub fn payload(&self) -> &JwtPayload {
         &self.payload
     }
 
@@ -74,98 +73,111 @@ impl<'a> UnverifiedJwt<'a> {
         &self.signature
     }
 
-    pub fn verify(self, jwk: &Jwk) -> Result<Jwt, VerificationError<'a>> {
-        match self.header.alg.as_ref() {
+    pub fn as_str(&self) -> &str {
+        &self.encoded
+    }
+
+    pub fn verify(&self, jwk: &Jwk) -> Result<(), JwtVerifyError> {
+        let alg = self.header.alg.as_str();
+
+        if let Some(jwk_alg) = &jwk.alg {
+            if alg != jwk_alg {
+                return Err(JwtVerifyError::InvalidSignature);
+            }
+        }
+
+        match alg {
             "RS256" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA256),
             "RS384" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA384),
             "RS512" => self.verify_rsa(jwk, &RSA_PKCS1_2048_8192_SHA512),
+            "PS256" => self.verify_rsa(jwk, &RSA_PSS_2048_8192_SHA256),
+            "PS384" => self.verify_rsa(jwk, &RSA_PSS_2048_8192_SHA384),
+            "PS512" => self.verify_rsa(jwk, &RSA_PSS_2048_8192_SHA512),
             "ES256" => self.verify_ecdsa(jwk, &ECDSA_P256_SHA256_FIXED),
             "ES384" => self.verify_ecdsa(jwk, &ECDSA_P384_SHA384_FIXED),
             // "ES512" => requires https://github.com/briansmith/ring/issues/824
-            _ => Err(VerificationError::new(Category::UnsupportedAlgorithm, self)),
+            _ => Err(JwtVerifyError::UnsupportedAlgorithm(alg.to_string())),
         }
     }
 
-    fn verify_rsa(self, jwk: &Jwk, alg: &RsaParameters) -> Result<Jwt, VerificationError<'a>> {
+    fn verify_rsa(&self, jwk: &Jwk, alg: &RsaParameters) -> Result<(), JwtVerifyError> {
+        if jwk.kty != "RSA" {
+            return Err(JwtVerifyError::InvalidSignature);
+        }
+
         let message = &self.encoded[..self.payload_end];
         let components = match jwk.rsa_components() {
             Some(c) => c,
-            None => return Err(VerificationError::new(Category::JwkMissingRsaParams, self)),
+            None => return Err(JwtVerifyError::InvalidSignature),
         };
 
-        if components
+        components
             .verify(alg, message.as_bytes(), &self.signature)
-            .is_err()
-        {
-            return Err(VerificationError::new(Category::InvalidSignature, self));
-        }
-
-        Ok(Jwt {
-            header: self.header,
-            payload: self.payload,
-        })
+            .map_err(|_| JwtVerifyError::InvalidSignature)
     }
 
     fn verify_ecdsa(
-        self,
+        &self,
         jwk: &Jwk,
         alg: &EcdsaVerificationAlgorithm,
-    ) -> Result<Jwt, VerificationError<'a>> {
+    ) -> Result<(), JwtVerifyError> {
+        if jwk.kty != "EC" {
+            return Err(JwtVerifyError::InvalidSignature);
+        }
+
         let message = &self.encoded[..self.payload_end];
         let public_key = match jwk.ecdsa_public_key() {
             Some(c) => c,
-            None => {
-                return Err(VerificationError::new(
-                    Category::JwkMissingEcdsaParams,
-                    self,
-                ))
-            }
+            None => return Err(JwtVerifyError::InvalidSignature),
         };
 
-        if alg
-            .verify(
-                public_key.as_slice().into(),
-                message.as_bytes().into(),
-                self.signature.as_slice().into(),
-            )
-            .is_err()
-        {
-            return Err(VerificationError::new(Category::InvalidSignature, self));
-        }
-
-        Ok(Jwt {
-            header: self.header,
-            payload: self.payload,
-        })
+        alg.verify(
+            public_key.as_slice().into(),
+            message.as_bytes().into(),
+            self.signature.as_slice().into(),
+        )
+        .map_err(|_| JwtVerifyError::InvalidSignature)
     }
 }
 
-impl fmt::Display for UnverifiedJwt<'_> {
+impl fmt::Display for Jwt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.encoded)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Jwt {
-    pub header: JwtHeader,
-    pub payload: JwtPayload,
+impl FromStr for Jwt {
+    type Err = JwtParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s.to_owned())
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JwtHeader {
-    pub typ: String,
     pub alg: String,
-    pub kid: String,
+    pub typ: Option<String>,
+    pub kid: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub struct JwtPayload(Map<String, Value>);
+pub struct JwtPayload(Value);
+
+impl<'de> Deserialize<'de> for JwtPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map = <Map<String, Value>>::deserialize(deserializer)?;
+        Ok(Self(Value::Object(map)))
+    }
+}
 
 impl JwtPayload {
     pub fn claims(&self) -> &Map<String, Value> {
-        &self.0
+        self.0.as_object().unwrap()
     }
 
     pub fn get_claim<'a>(&'a self, name: &str) -> Option<&'a Value> {
@@ -183,8 +195,8 @@ impl JwtPayload {
         }
     }
 
-    pub fn deserialize_into<T: serde::de::DeserializeOwned>(self) -> serde_json::Result<T> {
-        serde_json::from_value(Value::Object(self.0))
+    pub fn deserialize_as<T: serde::de::DeserializeOwned>(&self) -> serde_json::Result<T> {
+        T::deserialize(&self.0)
     }
 }
 

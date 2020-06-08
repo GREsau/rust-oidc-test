@@ -4,6 +4,6 @@ pub mod jwt;
 
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
-pub struct OpenidConfiguration {
+pub struct OpenIdConfiguration {
     pub jwks_uri: String,
 }

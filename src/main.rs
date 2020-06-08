@@ -1,4 +1,4 @@
-use rust_oidc_test::{jwk::Jwks, jwt::UnverifiedJwt, OpenidConfiguration};
+use rust_oidc_test::{jwk::Jwks, jwt::Jwt, OpenIdConfiguration};
 use std::error::Error;
 use std::io::stdin;
 
@@ -9,10 +9,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut jwt_string = String::new();
     stdin().read_line(&mut jwt_string)?;
 
-    let jwt = UnverifiedJwt::new(jwt_string.trim())?;
+    let jwt: Jwt = jwt_string.trim().parse()?;
 
     let iss = jwt
-        .unverified_payload()
+        .payload()
         .get_claim("iss")
         .expect("Missing issuer claim")
         .as_str()
@@ -24,16 +24,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Requesting config from {}", config_uri);
     let jwks_uri = reqwest::get(&config_uri)
         .await?
-        .json::<OpenidConfiguration>()
+        .json::<OpenIdConfiguration>()
         .await?
         .jwks_uri;
 
     println!("Requesting jwks from {}", jwks_uri);
     let jwks: Jwks = reqwest::get(&jwks_uri).await?.json::<Jwks>().await?;
 
-    let jwt = jwks.verify(jwt).map_err(|e| e.to_string())?;
+    jwks.verify(&jwt).map_err(|e| e.to_string())?;
 
-    println!("{}", serde_json::to_string_pretty(&jwt.payload)?);
+    println!("{}", serde_json::to_string_pretty(&jwt.payload())?);
 
     Ok(())
 }
