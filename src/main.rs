@@ -1,4 +1,5 @@
 use rust_oidc_test::{jwk::Jwks, jwt::Jwt, OpenIdConfiguration};
+use serde::Deserialize;
 use std::error::Error;
 use std::io::stdin;
 
@@ -9,7 +10,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut jwt_string = String::new();
     stdin().read_line(&mut jwt_string)?;
 
-    let jwt: Jwt = jwt_string.trim().parse()?;
+    let jwt = Jwt::new(jwt_string.trim())?;
 
     let iss = jwt
         .payload()
@@ -35,5 +36,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", serde_json::to_string_pretty(&jwt.payload())?);
 
+    let user = jwt.payload().deserialize_as::<User>()?;
+    println!("{:?}", user);
+
     Ok(())
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct User<'a> {
+    sub: &'a str,
+    name: &'a str,
+    scope: Vec<&'a str>,
 }

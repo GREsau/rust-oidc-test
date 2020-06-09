@@ -4,23 +4,29 @@ use core::fmt;
 use ring::signature::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::str::FromStr;
+use std::{borrow::Cow, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Jwt {
-    encoded: String,
+pub struct Jwt<'a> {
+    encoded: Cow<'a, str>,
     payload_end: usize,
     header: JwtHeader,
     payload: JwtPayload,
     signature: Vec<u8>,
 }
 
-impl Jwt {
-    pub fn new(encoded: String) -> Result<Self, JwtParseError> {
-        if encoded.is_empty() {
-            return Err(JwtParseError::WrongNumberOfParts(0));
-        }
+impl Jwt<'static> {
+    pub fn new_owned(encoded: String) -> Result<Self, JwtParseError> {
+        Self::new_from_cow(Cow::Owned(encoded))
+    }
+}
 
+impl<'a> Jwt<'a> {
+    pub fn new(encoded: &'a str) -> Result<Self, JwtParseError> {
+        Self::new_from_cow(Cow::Borrowed(encoded))
+    }
+
+    fn new_from_cow(encoded: Cow<'a, str>) -> Result<Self, JwtParseError> {
         let mut parts = encoded.split('.');
         let header_part = parts.next().ok_or(JwtParseError::WrongNumberOfParts(0))?;
         let payload_part = parts.next().ok_or(JwtParseError::WrongNumberOfParts(1))?;
@@ -36,6 +42,7 @@ impl Jwt {
         let payload = Self::decode_payload(payload_part).ok_or(JwtParseError::MalformedPayload)?;
         let signature =
             Self::decode_signature(signature_part).ok_or(JwtParseError::MalformedSignature)?;
+
         Ok(Self {
             encoded,
             payload_end,
@@ -140,17 +147,17 @@ impl Jwt {
     }
 }
 
-impl fmt::Display for Jwt {
+impl fmt::Display for Jwt<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.encoded)
     }
 }
 
-impl FromStr for Jwt {
+impl FromStr for Jwt<'static> {
     type Err = JwtParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::new(s.to_owned())
+        Self::new_owned(s.to_owned())
     }
 }
 
@@ -195,7 +202,7 @@ impl JwtPayload {
         }
     }
 
-    pub fn deserialize_as<T: serde::de::DeserializeOwned>(&self) -> serde_json::Result<T> {
+    pub fn deserialize_as<'de, T: serde::de::Deserialize<'de>>(&'de self) -> serde_json::Result<T> {
         T::deserialize(&self.0)
     }
 }
